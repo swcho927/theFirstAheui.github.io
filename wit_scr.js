@@ -33,11 +33,41 @@ function log(msg, color="#50fa7b") {
     consoleElem.scrollTop = consoleElem.scrollHeight;
 }
 
-// --- 주소 해결기 (Pointer Logic) ---
+// ── 주소 해결기 ──
+// [변경] 동적 주소 지원 추가
+// 기존: 그+거+ 패턴만 처리 (그 개수 = 주소)
+// 추가: 앞에 수식이 있으면 getVal()로 계산한 값을 주소로 사용
+// 예) "아그그,,그어거" → getVal("아그그,,그어") = 3 → 3번 주소
 function resolveAddr(memStr) {
-    let geuCount = (memStr.match(/그/g) || []).length;
-    let geoCount = (memStr.match(/거/g) || []).length;
-    
+    const trimmed = memStr.trim();
+
+    // 기존 동작: 순수하게 그+거* 패턴이면 원본 방식 그대로
+    if (/^그+거*$/.test(trimmed)) {
+        let geuCount = (trimmed.match(/그/g) || []).length;
+        let geoCount = (trimmed.match(/거/g) || []).length;
+        let addr = geuCount;
+        for (let i = 0; i < geoCount - 1; i++) {
+            addr = memory[addr] || 0;
+        }
+        return addr;
+    }
+
+    // 확장 동작: 마지막 거+ 를 분리하고 앞부분을 수식으로 평가
+    // "아그그,,그어거거" → exprPart="아그그,,그어", geoPart="거거"
+    const match = trimmed.match(/^(.*?)(거+)$/);
+    if (match) {
+        const exprPart = match[1];
+        const geoCount = match[2].length;
+        let addr = getVal(exprPart); // 수식 결과를 주소로
+        for (let i = 0; i < geoCount - 1; i++) {
+            addr = memory[addr] || 0;
+        }
+        return addr;
+    }
+
+    // fallback: 원본 방식
+    let geuCount = (trimmed.match(/그/g) || []).length;
+    let geoCount = (trimmed.match(/거/g) || []).length;
     let addr = geuCount;
     for (let i = 0; i < geoCount - 1; i++) {
         addr = memory[addr] || 0;
