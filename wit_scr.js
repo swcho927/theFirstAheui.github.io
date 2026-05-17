@@ -32,13 +32,7 @@ function log(msg, color="#50fa7b") {
 }
 
 // --- 주소 해결기 ---
-// 왼쪽 토큰들을 받아서 최종 메모리 주소(정수)를 반환
-// 마지막 거× N → N-1번 역참조 (주소를 반환해야 하므로)
-// 예) 그거     → 주소 1
-//     그그거거 → memory[2] 번지
-//     아그,,그어거 → getVal("아그,,그어") = 3 → 주소 3
 function resolveAddrFromTokens(tokens) {
-    // 맨 끝의 geo 토큰들을 분리
     let geoCount = 0;
     let i = tokens.length - 1;
     while (i >= 0 && tokens[i].type === 'geo') {
@@ -46,25 +40,20 @@ function resolveAddrFromTokens(tokens) {
         i--;
     }
     const exprTokens = tokens.slice(0, i + 1);
-
-    // 앞부분 수식 계산 (getValFromTokens 안에서 거 처리 포함)
     let addr = exprTokens.length === 0 ? 0 : getValFromTokens(exprTokens);
-
-    // 마지막 거들: 주소를 반환해야 하므로 N-1번만 역참조
     for (let j = 0; j < geoCount - 1; j++) {
         addr = memory[addr] ?? 0;
     }
     return addr;
 }
 
-// 하위 호환용 문자열 기반 resolveAddr
 function resolveAddr(memStr) {
     const trimmed = memStr.trim();
     const tokens = tokenizeLine(trimmed).filter(t => t.type !== 'text' && t.type !== 'comment');
     return resolveAddrFromTokens(tokens);
 }
 
-// --- Ghost Hover (원본 그대로) ---
+// --- Ghost Hover ---
 let currentHoverAddr = null;
 
 editor.addEventListener('mousemove', (e) => {
@@ -97,9 +86,6 @@ function clearHover() {
 }
 
 // --- 토크나이저 ---
-// 그+거+ 를 한 덩어리로 묶던 방식 제거
-// 그+ → num 토큰, 거+ → geo 토큰으로 분리
-// 파서가 수식+거 형태의 동적 주소를 처리할 수 있게 됨
 function tokenizeLine(text) {
     const regex = /(#.*)|(그+)|(거+)|(진짜뭐지|진짜뭐냐|뭐더라|뭐지|뭐냐|있잖아)|(아|어)|(\.\.\.|\.\.|\.|,,|,|;;|;|~)/g;
     let tokens = [];
@@ -201,9 +187,6 @@ function requestConsoleInput(promptMsg) {
 }
 
 // --- 수식 파서 ---
-// 거를 만나면 지금까지 계산한 값을 주소로 해서 memory[값] 으로 교체
-// 연속된 거거 → 두 번 역참조
-// ?? 0 사용: 초기화 안 된 메모리 기본값 0 (|| 0 은 값이 0일 때도 덮어써서 문제)
 function getValFromTokens(toks) {
     if (toks.length === 0) return 0;
     let pos = 0;
@@ -217,7 +200,6 @@ function getValFromTokens(toks) {
         if (t.type === 'bracket' && t.val === '아') {
             let res = parseExpr();
             consume(); // 어 소비
-            // 거를 만나면 res를 주소로 해서 메모리 접근, 연속 가능
             while (peek() && peek().type === 'geo') {
                 const geoTok = consume();
                 for (let i = 0; i < geoTok.val.length; i++) {
@@ -228,8 +210,7 @@ function getValFromTokens(toks) {
         }
 
         if (t.type === 'num') {
-            let val = t.val.length; // 그 개수 = 숫자
-            // 거를 만나면 val을 주소로 해서 메모리 접근, 연속 가능
+            let val = t.val.length;
             while (peek() && peek().type === 'geo') {
                 const geoTok = consume();
                 for (let i = 0; i < geoTok.val.length; i++) {
@@ -266,9 +247,9 @@ function getValFromTokens(toks) {
         let node = parseTerm();
         while (peek() && peek().type === 'op' && ['~', ';', ';;'].includes(peek().val)) {
             let op = consume().val, right = parseTerm();
-            if (op === '~')       node = node === right ? 1 : 0;
+            if      (op === '~')  node = node === right ? 1 : 0;
             else if (op === ';')  node = node > right   ? 1 : 0;
-            else                  node = node >= right  ? 1 : 0;
+            else if (op === ';;') node = node >= right  ? 1 : 0;
         }
         return node;
     }
@@ -282,7 +263,6 @@ function getVal(expr) {
 }
 
 // --- 실행 로직 ---
-// 토큰 기반으로 명령어와 좌우 피연산자 분리
 async function takeStep() {
     if (!isDebugMode) toggleMode();
     document.querySelectorAll('.line.active').forEach(el => el.classList.remove('active'));
@@ -317,7 +297,8 @@ async function takeStep() {
                     memory[targetAddr] = (val && val.length > 0) ? val.charCodeAt(0) : 0;
                 }
                 else if (cmdVal === '진짜뭐냐') {
-                    printOut(String.fromCharCode(getValFromTokens(rightToks)));
+                    // 변수 1개 → leftToks 사용
+                    printOut(String.fromCharCode(getValFromTokens(leftToks)));
                 }
                 else if (cmdVal === '뭐지') {
                     const targetAddr = getLeftAddr();
@@ -326,10 +307,12 @@ async function takeStep() {
                     memory[targetAddr] = parseInt(val) || 0;
                 }
                 else if (cmdVal === '뭐냐') {
-                    printOut(getValFromTokens(rightToks));
+                    // 변수 1개 → leftToks 사용
+                    printOut(getValFromTokens(leftToks));
                 }
                 else if (cmdVal === '있잖아') {
-                    pc += getValFromTokens(rightToks);
+                    // 변수 1개 → leftToks 사용
+                    pc += getValFromTokens(leftToks);
                     jumped = true;
                 }
             }
