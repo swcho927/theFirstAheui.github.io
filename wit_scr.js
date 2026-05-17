@@ -32,51 +32,34 @@ function log(msg, color="#50fa7b") {
 }
 
 // --- 주소 해결기 ---
-// [변경] 이제 memStr 대신 토큰 배열을 직접 받음
-// getVal()과 구조를 맞추기 위해 토큰 배열 기반으로 재설계
-// 거+ 앞의 수식을 getValFromTokens()로 계산해서 주소로 사용
+// 왼쪽 토큰들을 받아서 최종 메모리 주소(정수)를 반환
+// 마지막 거× N → N-1번 역참조 (주소를 반환해야 하므로)
+// 예) 그거     → 주소 1
+//     그그거거 → memory[2] 번지
+//     아그,,그어거 → getVal("아그,,그어") = 3 → 주소 3
 function resolveAddrFromTokens(tokens) {
-    // 마지막 연속된 거 토큰들을 분리
-    // 예) [수식토큰들..., {거}, {거}] → 수식부분 + geoCount=2
+    // 맨 끝의 geo 토큰들을 분리
     let geoCount = 0;
     let i = tokens.length - 1;
     while (i >= 0 && tokens[i].type === 'geo') {
-        geoCount++;
+        geoCount += tokens[i].val.length;
         i--;
     }
-    const exprTokens = tokens.slice(0, i + 1); // 거 앞의 수식 토큰들
+    const exprTokens = tokens.slice(0, i + 1);
 
-    let addr;
-    if (exprTokens.length === 0) {
-        // 거만 있는 경우: 주소 0에서 시작
-        addr = 0;
-    } else if (exprTokens.length === 1 && exprTokens[0].type === 'num') {
-        // 순수 그+ 만 있는 경우: 그 개수가 주소
-        addr = exprTokens[0].val.length;
-    } else {
-        // 수식이 있는 경우: getVal로 계산
-        addr = getValFromTokens(exprTokens);
-    }
+    // 앞부분 수식 계산 (getValFromTokens 안에서 거 처리 포함)
+    let addr = exprTokens.length === 0 ? 0 : getValFromTokens(exprTokens);
 
-    // 거 개수 - 1 만큼 역참조 (포인터)
+    // 마지막 거들: 주소를 반환해야 하므로 N-1번만 역참조
     for (let j = 0; j < geoCount - 1; j++) {
-        addr = memory[addr] || 0;
+        addr = memory[addr] ?? 0;
     }
     return addr;
 }
 
-// 기존 문자열 기반 resolveAddr는 하위 호환용으로 유지
+// 하위 호환용 문자열 기반 resolveAddr
 function resolveAddr(memStr) {
     const trimmed = memStr.trim();
-    // 순수 그+거* 패턴이면 빠른 처리
-    if (/^그+거*$/.test(trimmed)) {
-        let geuCount = (trimmed.match(/그/g) || []).length;
-        let geoCount = (trimmed.match(/거/g) || []).length;
-        let addr = geuCount;
-        for (let i = 0; i < geoCount - 1; i++) addr = memory[addr] || 0;
-        return addr;
-    }
-    // 그 외: 토크나이징 후 토큰 기반으로 처리
     const tokens = tokenizeLine(trimmed).filter(t => t.type !== 'text' && t.type !== 'comment');
     return resolveAddrFromTokens(tokens);
 }
@@ -114,11 +97,10 @@ function clearHover() {
 }
 
 // --- 토크나이저 ---
-// [변경] 그+거+ 를 한 덩어리로 묶던 방식 제거
-// 대신 그+ 와 거+ 를 별도 토큰(num / geo)으로 분리
-// → 파서가 수식+거 형태의 동적 주소를 인식할 수 있게 됨
+// 그+거+ 를 한 덩어리로 묶던 방식 제거
+// 그+ → num 토큰, 거+ → geo 토큰으로 분리
+// 파서가 수식+거 형태의 동적 주소를 처리할 수 있게 됨
 function tokenizeLine(text) {
-    // 변경: (그+거+) 제거, 대신 (거+) 를 독립 패턴으로 추가
     const regex = /(#.*)|(그+)|(거+)|(진짜뭐지|진짜뭐냐|뭐더라|뭐지|뭐냐|있잖아)|(아|어)|(\.\.\.|\.\.|\.|,,|,|;;|;|~)/g;
     let tokens = [];
     let lastIdx = 0;
@@ -127,7 +109,7 @@ function tokenizeLine(text) {
         if (offset > lastIdx) tokens.push({ type: 'text', val: text.slice(lastIdx, offset) });
         if      (comm)    tokens.push({ type: 'comment', val: comm });
         else if (num)     tokens.push({ type: 'num',     val: num });
-        else if (geo)     tokens.push({ type: 'geo',     val: geo }); // 거+ 독립 토큰
+        else if (geo)     tokens.push({ type: 'geo',     val: geo });
         else if (cmd)     tokens.push({ type: 'cmd',     val: cmd });
         else if (bracket) tokens.push({ type: 'bracket', val: bracket });
         else if (op)      tokens.push({ type: 'op',      val: op });
@@ -139,7 +121,6 @@ function tokenizeLine(text) {
 }
 
 function renderTokens(tokens) {
-    // geo 토큰은 mem 처럼 렌더링 (주소 계산은 컨텍스트가 필요해서 단순 표시만)
     return tokens.map(t => {
         if (t.type === 'geo') return `<span class="tok-mem">${t.val}</span>`;
         return `<span class="tok-${t.type}">${t.val}</span>`;
@@ -220,10 +201,9 @@ function requestConsoleInput(promptMsg) {
 }
 
 // --- 수식 파서 ---
-// [변경] geo 토큰(거+)을 파서가 인식하도록 확장
-// parseAtom에서 geo 토큰이 나오면 앞의 수식과 합쳐서 동적 주소로 처리
-// getVal(문자열) → 내부에서 tokenizeLine 후 getValFromTokens 호출
-
+// 거를 만나면 지금까지 계산한 값을 주소로 해서 memory[값] 으로 교체
+// 연속된 거거 → 두 번 역참조
+// ?? 0 사용: 초기화 안 된 메모리 기본값 0 (|| 0 은 값이 0일 때도 덮어써서 문제)
 function getValFromTokens(toks) {
     if (toks.length === 0) return 0;
     let pos = 0;
@@ -237,36 +217,26 @@ function getValFromTokens(toks) {
         if (t.type === 'bracket' && t.val === '아') {
             let res = parseExpr();
             consume(); // 어 소비
-
-            // [변경 핵심] 닫는 어 다음에 거+ 가 오면 동적 주소로 처리
-            // 예) 아그,,그어거 → res=3, 거×1 → memory[3] 의 값
-            if (peek() && peek().type === 'geo') {
+            // 거를 만나면 res를 주소로 해서 메모리 접근, 연속 가능
+            while (peek() && peek().type === 'geo') {
                 const geoTok = consume();
-                const geoCount = geoTok.val.length;
-                let addr = res;
-                // 거 개수만큼 역참조 (거×1이면 직접 주소, 거×2면 1단계 포인터)
-                for (let i = 0; i < geoCount - 1; i++) addr = memory[addr] || 0;
-                return memory[addr] || 0;
+                for (let i = 0; i < geoTok.val.length; i++) {
+                    res = memory[res] ?? 0;
+                }
             }
-
             return res;
         }
 
         if (t.type === 'num') {
-            const geuLen = t.val.length; // 그 개수
-
-            // [변경 핵심] 그+ 다음에 거+ 가 오면 메모리 주소로 처리
-            // 예) 그그거 → geuLen=2, geoCount=1 → memory[2]
-            if (peek() && peek().type === 'geo') {
+            let val = t.val.length; // 그 개수 = 숫자
+            // 거를 만나면 val을 주소로 해서 메모리 접근, 연속 가능
+            while (peek() && peek().type === 'geo') {
                 const geoTok = consume();
-                const geoCount = geoTok.val.length;
-                let addr = geuLen;
-                for (let i = 0; i < geoCount - 1; i++) addr = memory[addr] || 0;
-                return memory[addr] || 0;
+                for (let i = 0; i < geoTok.val.length; i++) {
+                    val = memory[val] ?? 0;
+                }
             }
-
-            // 거 없으면 그냥 숫자
-            return geuLen;
+            return val;
         }
 
         return 0;
@@ -276,9 +246,9 @@ function getValFromTokens(toks) {
         let node = parseAtom();
         while (peek() && peek().type === 'op' && ['.', '..', '...'].includes(peek().val)) {
             let op = consume().val, right = parseAtom();
-            if (op === '.') node *= right;
+            if (op === '.')        node *= right;
             else if (op === '..') node = Math.floor(node / right);
-            else node %= right;
+            else                  node %= right;
         }
         return node;
     }
@@ -312,8 +282,7 @@ function getVal(expr) {
 }
 
 // --- 실행 로직 ---
-// [변경] 명령어 파싱에서 주소 추출 방식을 토큰 기반으로 변경
-// fullLine.replace("뭐더라", "") 대신 토큰에서 cmd 위치를 찾아 분리
+// 토큰 기반으로 명령어와 좌우 피연산자 분리
 async function takeStep() {
     if (!isDebugMode) toggleMode();
     document.querySelectorAll('.line.active').forEach(el => el.classList.remove('active'));
@@ -328,17 +297,14 @@ async function takeStep() {
 
     if (fullLine) {
         try {
-            // 토큰 기반으로 명령어와 좌우 피연산자 분리
-            const allToks = tokenizeLine(fullLine).filter(t => t.type !== 'text' && t.type !== 'comment');
-            const cmdIdx  = allToks.findIndex(t => t.type === 'cmd');
+            const allToks  = tokenizeLine(fullLine).filter(t => t.type !== 'text' && t.type !== 'comment');
+            const cmdIdx   = allToks.findIndex(t => t.type === 'cmd');
 
             if (cmdIdx !== -1) {
-                const cmdVal   = allToks[cmdIdx].val;
-                const leftToks = allToks.slice(0, cmdIdx);   // 명령어 왼쪽 토큰들
-                const rightToks= allToks.slice(cmdIdx + 1);  // 명령어 오른쪽 토큰들
+                const cmdVal    = allToks[cmdIdx].val;
+                const leftToks  = allToks.slice(0, cmdIdx);
+                const rightToks = allToks.slice(cmdIdx + 1);
 
-                // 왼쪽 토큰들로 주소 계산
-                // 예) "아그,,그어거 뭐더라 ..." → leftToks=[아,그,,,그,어,거]
                 const getLeftAddr = () => resolveAddrFromTokens(leftToks);
 
                 if (cmdVal === '뭐더라') {
